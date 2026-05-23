@@ -111,6 +111,7 @@ exports.crearPreferencia = async (req, res) => {
             comprador: {
                 email: emailComprador
             },
+            idReserva: reserva._id,
 
             estado_pago: 'pending'
         });
@@ -269,32 +270,27 @@ exports.procesarWebhook = async (req, res) => {
 
         await orden.save();
 
-        // Sólo ejecutar lógica de negocio cuando el pago fue aprobado
+        // Sólo ejecutar lógica final cuando el pago fue aprobado
         if (pago.status !== 'approved') {
             return res.sendStatus(200);
         }
 
-        // Vaciar carrito
+        // Marcar reserva como consumida
+        if (orden.idReserva) {
+
+            await ReservaStock.findByIdAndUpdate(
+                orden.idReserva,
+                {
+                    estado: 'consumida'
+                }
+            );
+        }
+
+        // Vaciar carrito del usuario
         await Carrito.findOneAndUpdate(
             { usuario: orden.usuario },
             { productos: [] }
         );
-
-        // Descontar stock
-        for (const item of orden.productos) {
-
-            await Producto.findOneAndUpdate(
-                {
-                    nombre: item.titulo,
-                    'talles.talle': item.talle
-                },
-                {
-                    $inc: {
-                        'talles.$.stock': -item.cantidad
-                    }
-                }
-            );
-        }
 
         return res.sendStatus(200);
 

@@ -1,6 +1,7 @@
 const express = require('express');
 const cors = require('cors');
 const { dbConection } = require('../database/config');
+const { iniciarJobs } = require('../jobs');
 
 class Server {
     constructor() {
@@ -12,11 +13,12 @@ class Server {
         this.categoriaPath = '/api/categoria';
         this.carritoPath = '/api/carrito';
         this.paymentPath = '/api/payment';
-        this.ordenPath = '/api/orden'
+        this.ordenPath = '/api/orden';
+        
 
         // Conectar con la DB
         this.conectarDB();
-
+        
         // Middlewares
         this.middlewares();
 
@@ -26,6 +28,7 @@ class Server {
 
     async conectarDB() {
         await dbConection();
+        iniciarJobs();
     }
 
     middlewares() { 

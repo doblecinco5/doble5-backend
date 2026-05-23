@@ -8,7 +8,7 @@ const ordenSchema = new mongoose.Schema({
             titulo: String,
             cantidad: Number,
             precio_unitario: Number,
-            talle: String // <--- NUEVO
+            talle: String 
         }
     ],
 
@@ -23,7 +23,11 @@ const ordenSchema = new mongoose.Schema({
     creadoEn: {
         type: Date,
         default: Date.now
-    }
+    },
+    idReserva: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'ReservaStock'
+    },
 });
 
 module.exports = mongoose.model('Orden', ordenSchema);

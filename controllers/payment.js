@@ -14,7 +14,7 @@ const payment = new Payment(client);
 exports.crearPreferencia = async (req, res) => {
 
     const reservasRealizadas = [];
-
+    let reservaCreada = null;
     try {
 
         console.log('Entrando a crearPreferencia');
@@ -111,7 +111,6 @@ exports.crearPreferencia = async (req, res) => {
             comprador: {
                 email: emailComprador
             },
-            idReserva: reserva._id,
 
             estado_pago: 'pending'
         });
@@ -121,8 +120,12 @@ exports.crearPreferencia = async (req, res) => {
             orden._id.toString()
         );
 
+        const fechaExpiracion = new Date(
+            Date.now() + (10 * 60 * 1000)
+        );
+
         // Crear reserva de stock
-        await ReservaStock.create({
+        const reserva = await ReservaStock.create({
             usuario: idUsuario,
 
             orden: orden._id,
@@ -135,10 +138,13 @@ exports.crearPreferencia = async (req, res) => {
                 cantidad: item.cantidad
             })),
 
-            expiraEn: new Date(
-                Date.now() + (10 * 60 * 1000)
-            )
+            expiraEn: fechaExpiracion
         });
+
+        orden.idReserva = reserva._id;
+
+        await orden.save();
+
 
         const preferencia = await preference.create({
             body: {
@@ -146,6 +152,13 @@ exports.crearPreferencia = async (req, res) => {
                 external_reference: orden._id.toString(),
 
                 items,
+
+                // La preferencia de Mercado Pago vence en 10 minutos
+                expires: true,
+
+                expiration_date_from: new Date().toISOString(),
+
+                expiration_date_to: fechaExpiracion.toISOString(),
 
                 payer: {
                     name: nombreComprador,
@@ -200,6 +213,18 @@ exports.crearPreferencia = async (req, res) => {
                         'talles.$.stock': reserva.cantidad
                     }
                 }
+            );
+        }
+
+        if (reservaCreada) {
+            await ReservaStock.findByIdAndDelete(
+                reservaCreada._id
+            );
+        }
+
+        if (orden?._id) {
+            await Orden.findByIdAndDelete(
+                orden._id
             );
         }
 

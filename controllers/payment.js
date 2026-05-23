@@ -3,6 +3,7 @@ const client = require('../config/mercadoPago');
 const Orden = require('../models/orden');
 const Carrito = require('../models/carrito');
 const Producto = require('../models/producto');
+const ReservaStock = require('../models/reservaStock')
 
 const { Preference, Payment } = require('mercadopago');
 
@@ -11,10 +12,12 @@ const payment = new Payment(client);
 
 
 exports.crearPreferencia = async (req, res) => {
+
+    const reservasRealizadas = [];
+
     try {
 
         console.log('Entrando a crearPreferencia');
-        console.log('Usuario:', req.usuario);
 
         if (!req.usuario) {
             return res.status(401).json({
@@ -36,18 +39,64 @@ exports.crearPreferencia = async (req, res) => {
             });
         }
 
-        console.log(
-            'Productos en carrito:',
-            JSON.stringify(carrito.productos, null, 2)
-        );
+        // Reservar stock de forma atómica
+        for (const item of carrito.productos) {
+
+            const productoActualizado = await Producto.findOneAndUpdate(
+                {
+                    _id: item.producto._id,
+                    talles: {
+                        $elemMatch: {
+                            talle: item.talle,
+                            stock: { $gte: item.cantidad }
+                        }
+                    }
+                },
+                {
+                    $inc: {
+                        'talles.$.stock': -item.cantidad
+                    }
+                },
+                {
+                    new: true
+                }
+            );
+
+            if (!productoActualizado) {
+
+                // rollback de cualquier reserva previa
+                for (const reserva of reservasRealizadas) {
+
+                    await Producto.findOneAndUpdate(
+                        {
+                            _id: reserva.productoId,
+                            'talles.talle': reserva.talle
+                        },
+                        {
+                            $inc: {
+                                'talles.$.stock': reserva.cantidad
+                            }
+                        }
+                    );
+                }
+
+                return res.status(400).json({
+                    error: `Stock insuficiente para ${item.producto.nombre} talle ${item.talle}`
+                });
+            }
+
+            reservasRealizadas.push({
+                productoId: item.producto._id,
+                talle: item.talle,
+                cantidad: item.cantidad
+            });
+        }
 
         const items = carrito.productos.map(item => ({
             title: item.producto.nombre,
             quantity: item.cantidad,
             unit_price: Number(item.producto.precio)
         }));
-
-
 
         const orden = await Orden.create({
             usuario: idUsuario,
@@ -71,14 +120,31 @@ exports.crearPreferencia = async (req, res) => {
             orden._id.toString()
         );
 
+        // Crear reserva de stock
+        await ReservaStock.create({
+            usuario: idUsuario,
 
-        //Crear preferencia
+            orden: orden._id,
+
+            estado: 'activa',
+
+            productos: carrito.productos.map(item => ({
+                producto: item.producto._id,
+                talle: item.talle,
+                cantidad: item.cantidad
+            })),
+
+            expiraEn: new Date(
+                Date.now() + (10 * 60 * 1000)
+            )
+        });
+
         const preferencia = await preference.create({
             body: {
 
-                items,
-
                 external_reference: orden._id.toString(),
+
+                items,
 
                 payer: {
                     name: nombreComprador,
@@ -110,8 +176,6 @@ exports.crearPreferencia = async (req, res) => {
             preferencia.id
         );
 
-        //Guardar id de la preferencia
-
         orden.id_preferencia = preferencia.id;
 
         await orden.save();
@@ -121,6 +185,22 @@ exports.crearPreferencia = async (req, res) => {
         });
 
     } catch (error) {
+
+        // rollback del stock reservado
+        for (const reserva of reservasRealizadas) {
+
+            await Producto.findOneAndUpdate(
+                {
+                    _id: reserva.productoId,
+                    'talles.talle': reserva.talle
+                },
+                {
+                    $inc: {
+                        'talles.$.stock': reserva.cantidad
+                    }
+                }
+            );
+        }
 
         console.error(
             'Error al crear preferencia:',

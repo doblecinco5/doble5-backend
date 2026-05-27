@@ -50,7 +50,8 @@ const MovimientoInventarioSchema = new Schema({
         enum: [
             'Ingreso',
             'Orden',
-            'VentaPresencial'
+            'VentaPresencial',
+            'Producto'
         ],
         required: true
     },

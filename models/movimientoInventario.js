@@ -13,18 +13,12 @@ const MovimientoInventarioSchema = new Schema(
             required: true
         },
 
-        detalles: [
+        productos: [
             {
-                talle: {
-                    type: String,
-                    required: true
-                },
-
-                cantidad: {
-                    type: Number,
-                    required: true,
-                    min: 1
-                }
+                producto,
+                nombreProducto,
+                cantidadCurvas,
+                movimientoPorTalle
             }
         ],
 

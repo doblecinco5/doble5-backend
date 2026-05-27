@@ -14,11 +14,14 @@ class Server {
         this.carritoPath = '/api/carrito';
         this.paymentPath = '/api/payment';
         this.ordenPath = '/api/orden';
-        
+        this.ingresoPath = '/api/ingreso';
+        this.ventaPresencialPath = '/api/venta-presencial';
+        this.movimientoInventarioPath = '/api/movimiento-inventario';
+
 
         // Conectar con la DB
         this.conectarDB();
-        
+
         // Middlewares
         this.middlewares();
 
@@ -31,19 +34,19 @@ class Server {
         iniciarJobs();
     }
 
-    middlewares() { 
-        
+    middlewares() {
+
         this.app.use(cors({
             origin: ['http://localhost:3000', process.env.FRONTEND_URL], // Lista de orígenes permitidos
-            methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'], 
+            methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
             allowedHeaders: ['Content-Type', 'Authorization', "x-token"],
-            credentials: true, 
+            credentials: true,
         }));
 
-        
+
         this.app.use(express.json());
 
-        
+
         this.app.use(express.static('public'));
     }
 
@@ -54,7 +57,10 @@ class Server {
         this.app.use(this.categoriaPath, require('../routes/categoria'));
         this.app.use(this.carritoPath, require('../routes/carrito'));
         this.app.use(this.paymentPath, require('../routes/payment'))
-        this.app.use(this.ordenPath, require ('../routes/orden'));
+        this.app.use(this.ordenPath, require('../routes/orden'));
+        this.app.use(this.ingresoPath, require('../routes/ingreso'));
+        this.app.use(this.ventaPresencialPath, require('../routes/ventaPresencial'));
+        this.app.use(this.movimientoInventarioPath, require('../routes/movimientoInventario'));
     }
 
     listen() {

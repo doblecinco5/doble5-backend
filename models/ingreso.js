@@ -4,37 +4,48 @@ const IngresoSchema = new Schema(
     {
         proveedor: {
             type: String,
-            required: true,
-            trim: true
-        },
-
-        producto: {
-            type: Schema.Types.ObjectId,
-            ref: 'Producto',
             required: true
         },
 
-        nombreProducto: {
-            type: String,
-            required: true
-        },
-
-        detalles: [
+        productos: [
             {
-                talle: {
+                producto: {
+                    type: Schema.Types.ObjectId,
+                    ref: 'Producto',
+                    required: true
+                },
+
+                nombreProducto: {
                     type: String,
                     required: true
                 },
 
-                cantidad: {
+                cantidadCurvas: {
                     type: Number,
                     required: true,
                     min: 1
+                },
+
+                precioCurva: {
+                    type: Number,
+                    required: true,
+                    min: 0
+                },
+
+                subtotal: {
+                    type: Number,
+                    required: true,
+                    min: 0
+                },
+
+                calidadTela: {
+                    type: String,
+                    default: ''
                 }
             }
         ],
 
-        precioCompraUnitario: {
+        totalIngreso: {
             type: Number,
             required: true,
             min: 0
@@ -47,7 +58,8 @@ const IngresoSchema = new Schema(
 
         creadoPor: {
             type: Schema.Types.ObjectId,
-            ref: 'Usuario'
+            ref: 'Usuario',
+            required: true
         }
     },
     {

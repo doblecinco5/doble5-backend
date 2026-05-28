@@ -37,7 +37,7 @@ class Server {
     middlewares() {
 
         this.app.use(cors({
-            origin: ['http://localhost:3000', process.env.FRONTEND_URL], // Lista de orígenes permitidos
+            origin: ['http://localhost:3000', process.env.FRONTEND_URL, process.env.DASHBOARD_URL], // Lista de orígenes permitidos
             methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
             allowedHeaders: ['Content-Type', 'Authorization', "x-token"],
             credentials: true,

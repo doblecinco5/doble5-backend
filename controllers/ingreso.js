@@ -1,3 +1,4 @@
+const mongoose = require('mongoose');
 const Producto = require('../models/producto');
 const Ingreso = require('../models/ingreso');
 const MovimientoInventario = require('../models/movimientoInventario');
@@ -12,7 +13,11 @@ const TALLES_CURVA = [
 
 const crearIngreso = async (req, res) => {
 
+    const session = await mongoose.startSession();
+
     try {
+
+        session.startTransaction();
 
         const {
             proveedor,
@@ -21,6 +26,9 @@ const crearIngreso = async (req, res) => {
         } = req.body;
 
         if (!productos || productos.length === 0) {
+
+            await session.abortTransaction();
+
             return res.status(400).json({
                 msg: 'Debe enviar productos'
             });
@@ -44,7 +52,7 @@ const crearIngreso = async (req, res) => {
 
             let producto = await Producto.findOne({
                 nombre
-            });
+            }).session(session);
 
             const subtotal =
                 cantidadCurvas * precioCurva;
@@ -59,27 +67,35 @@ const crearIngreso = async (req, res) => {
                     !categoria ||
                     !precioVenta
                 ) {
+
+                    await session.abortTransaction();
+
                     return res.status(400).json({
                         msg: `Faltan datos para crear el producto ${nombre}`
                     });
                 }
 
-                producto = await Producto.create({
-                    nombre,
-                    descripcion,
-                    categoria,
-                    precio: precioVenta,
-                    imagenes,
-                    activo: true,
-                    destacado: false,
+                const productosCreados = await Producto.create(
+                    [{
+                        nombre,
+                        descripcion,
+                        categoria,
+                        precio: precioVenta,
+                        imagenes,
+                        activo: true,
+                        destacado: false,
 
-                    talles: TALLES_CURVA.map(
-                        talle => ({
-                            talle,
-                            stock: cantidadCurvas
-                        })
-                    )
-                });
+                        talles: TALLES_CURVA.map(
+                            talle => ({
+                                talle,
+                                stock: cantidadCurvas
+                            })
+                        )
+                    }],
+                    { session }
+                );
+
+                producto = productosCreados[0];
 
             } else {
 
@@ -105,7 +121,7 @@ const crearIngreso = async (req, res) => {
                     }
                 }
 
-                await producto.save();
+                await producto.save({ session });
             }
 
             productosIngreso.push({
@@ -119,43 +135,45 @@ const crearIngreso = async (req, res) => {
         }
 
         // Crear ingreso
-        const ingreso = await Ingreso.create({
-            proveedor,
-            productos: productosIngreso,
-            total: totalIngreso,
-            observaciones,
-            creadoPor: req.usuario._id
-        });
+        const ingresosCreados = await Ingreso.create(
+            [{
+                proveedor,
+                productos: productosIngreso,
+                total: totalIngreso,
+                observaciones,
+                creadoPor: req.usuario._id
+            }],
+            { session }
+        );
+
+        const ingreso = ingresosCreados[0];
 
         // Crear movimientos
         for (const item of productosIngreso) {
 
-            await MovimientoInventario.create({
+            await MovimientoInventario.create(
+                [{
+                    tipo: 'ingreso',
+                    producto: item.producto,
+                    nombreProducto: item.nombreProducto,
 
-                tipo: 'ingreso',
+                    detalles: TALLES_CURVA.map(
+                        talle => ({
+                            talle,
+                            cantidad: item.cantidadCurvas
+                        })
+                    ),
 
-                producto: item.producto,
-
-                nombreProducto:
-                    item.nombreProducto,
-
-                detalles: TALLES_CURVA.map(
-                    talle => ({
-                        talle,
-                        cantidad:
-                            item.cantidadCurvas
-                    })
-                ),
-
-                referenciaId: ingreso._id,
-
-                modeloReferencia: 'Ingreso',
-
-                observaciones,
-
-                creadoPor: req.usuario._id
-            });
+                    referenciaId: ingreso._id,
+                    modeloReferencia: 'Ingreso',
+                    observaciones,
+                    creadoPor: req.usuario._id
+                }],
+                { session }
+            );
         }
+
+        await session.commitTransaction();
 
         return res.status(201).json({
             ingreso
@@ -163,11 +181,17 @@ const crearIngreso = async (req, res) => {
 
     } catch (error) {
 
+        await session.abortTransaction();
+
         console.error(error);
 
         return res.status(500).json({
             msg: 'Error al registrar ingreso'
         });
+
+    } finally {
+
+        session.endSession();
     }
 };
 

@@ -1,25 +1,32 @@
+const mongoose = require('mongoose');
+
 const client = require('../config/mercadoPago');
 
 const Orden = require('../models/orden');
 const Carrito = require('../models/carrito');
 const Producto = require('../models/producto');
-const ReservaStock = require('../models/reservaStock')
+const ReservaStock = require('../models/reservaStock');
+const MovimientoInventario = require('../models/movimientoInventario');
 
 const { Preference, Payment } = require('mercadopago');
 
 const preference = new Preference(client);
 const payment = new Payment(client);
 
-
 exports.crearPreferencia = async (req, res) => {
 
-    const reservasRealizadas = [];
-    let reservaCreada = null;
+    const session = await mongoose.startSession();
+
     try {
+
+        session.startTransaction();
 
         console.log('Entrando a crearPreferencia');
 
         if (!req.usuario) {
+
+            await session.abortTransaction();
+
             return res.status(401).json({
                 error: 'No autorizado'
             });
@@ -30,90 +37,105 @@ exports.crearPreferencia = async (req, res) => {
         const nombreComprador = req.usuario.nombre;
 
         const carrito = await Carrito
-            .findOne({ usuario: idUsuario })
-            .populate('productos.producto');
+            .findOne({
+                usuario: idUsuario
+            })
+            .populate('productos.producto')
+            .session(session);
 
         if (!carrito || carrito.productos.length === 0) {
+
+            await session.abortTransaction();
+
             return res.status(400).json({
                 error: 'El carrito está vacío.'
             });
         }
 
-        // Reservar stock de forma atómica
+        // Reservar stock
         for (const item of carrito.productos) {
 
-            const productoActualizado = await Producto.findOneAndUpdate(
-                {
-                    _id: item.producto._id,
-                    talles: {
-                        $elemMatch: {
-                            talle: item.talle,
-                            stock: { $gte: item.cantidad }
+            const productoActualizado =
+                await Producto.findOneAndUpdate(
+                    {
+                        _id: item.producto._id,
+
+                        talles: {
+                            $elemMatch: {
+                                talle: item.talle,
+                                stock: {
+                                    $gte: item.cantidad
+                                }
+                            }
                         }
+                    },
+                    {
+                        $inc: {
+                            'talles.$.stock':
+                                -item.cantidad
+                        }
+                    },
+                    {
+                        new: true,
+                        session
                     }
-                },
-                {
-                    $inc: {
-                        'talles.$.stock': -item.cantidad
-                    }
-                },
-                {
-                    new: true
-                }
-            );
+                );
 
             if (!productoActualizado) {
 
-                // rollback de cualquier reserva previa
-                for (const reserva of reservasRealizadas) {
-
-                    await Producto.findOneAndUpdate(
-                        {
-                            _id: reserva.productoId,
-                            'talles.talle': reserva.talle
-                        },
-                        {
-                            $inc: {
-                                'talles.$.stock': reserva.cantidad
-                            }
-                        }
-                    );
-                }
+                await session.abortTransaction();
 
                 return res.status(400).json({
                     error: `Stock insuficiente para ${item.producto.nombre} talle ${item.talle}`
                 });
             }
-
-            reservasRealizadas.push({
-                productoId: item.producto._id,
-                talle: item.talle,
-                cantidad: item.cantidad
-            });
         }
 
-        const items = carrito.productos.map(item => ({
-            title: item.producto.nombre,
-            quantity: item.cantidad,
-            unit_price: Number(item.producto.precio)
-        }));
+        const items = carrito.productos.map(
+            item => ({
+                title: item.producto.nombre,
+                quantity: item.cantidad,
+                unit_price: Number(
+                    item.producto.precio
+                )
+            })
+        );
 
-        const orden = await Orden.create({
-            usuario: idUsuario,
+        const ordenesCreadas =
+            await Orden.create(
+                [{
+                    usuario: idUsuario,
 
-            productos: carrito.productos.map(item => ({
-                titulo: item.producto.nombre,
-                cantidad: item.cantidad,
-                precio_unitario: item.producto.precio,
-                talle: item.talle
-            })),
+                    productos:
+                        carrito.productos.map(
+                            item => ({
+                                producto:
+                                    item.producto._id,
 
-            comprador: {
-                email: emailComprador
-            },
+                                titulo:
+                                    item.producto.nombre,
 
-            estado_pago: 'pending'
-        });
+                                cantidad:
+                                    item.cantidad,
+
+                                precio_unitario:
+                                    item.producto.precio,
+
+                                talle:
+                                    item.talle
+                            })
+                        ),
+
+                    comprador: {
+                        email: emailComprador
+                    },
+
+                    estado_pago: 'pending'
+                }],
+                { session }
+            );
+
+        const orden = ordenesCreadas[0];
 
         console.log(
             'Orden creada:',
@@ -124,75 +146,101 @@ exports.crearPreferencia = async (req, res) => {
             Date.now() + (10 * 60 * 1000)
         );
 
-        // Crear reserva de stock
-        const reserva = await ReservaStock.create({
-            usuario: idUsuario,
+        // Crear reserva
+        const reservasCreadas =
+            await ReservaStock.create(
+                [{
+                    usuario: idUsuario,
 
-            orden: orden._id,
+                    orden: orden._id,
 
-            estado: 'activa',
+                    estado: 'activa',
 
-            productos: carrito.productos.map(item => ({
-                producto: item.producto._id,
-                talle: item.talle,
-                cantidad: item.cantidad
-            })),
+                    productos:
+                        carrito.productos.map(
+                            item => ({
+                                producto:
+                                    item.producto._id,
 
-            expiraEn: fechaExpiracion
-        });
+                                talle:
+                                    item.talle,
+
+                                cantidad:
+                                    item.cantidad
+                            })
+                        ),
+
+                    expiraEn:
+                        fechaExpiracion
+                }],
+                { session }
+            );
+
+        const reserva = reservasCreadas[0];
 
         orden.idReserva = reserva._id;
 
-        await orden.save();
+        await orden.save({ session });
 
+        const preferencia =
+            await preference.create({
+                body: {
 
-        const preferencia = await preference.create({
-            body: {
+                    external_reference:
+                        orden._id.toString(),
 
-                external_reference: orden._id.toString(),
+                    items,
 
-                items,
+                    expires: true,
 
-                // La preferencia de Mercado Pago vence en 10 minutos
-                expires: true,
+                    expiration_date_from:
+                        new Date().toISOString(),
 
-                expiration_date_from: new Date().toISOString(),
+                    expiration_date_to:
+                        fechaExpiracion.toISOString(),
 
-                expiration_date_to: fechaExpiracion.toISOString(),
+                    payer: {
+                        name: nombreComprador,
+                        email: emailComprador
+                    },
 
-                payer: {
-                    name: nombreComprador,
-                    email: emailComprador
-                },
+                    payment_methods: {
+                        excluded_payment_types: [
+                            { id: 'ticket' },
+                            { id: 'atm' }
+                        ],
+                        installments: 12
+                    },
 
-                payment_methods: {
-                    excluded_payment_types: [
-                        { id: 'ticket' },
-                        { id: 'atm' }
-                    ],
-                    installments: 12
-                },
+                    back_urls: {
+                        success:
+                            `${process.env.FRONTEND_URL}/success`,
 
-                back_urls: {
-                    success: `${process.env.FRONTEND_URL}/success`,
-                    failure: `${process.env.FRONTEND_URL}/failure`,
-                    pending: `${process.env.FRONTEND_URL}/pending`
-                },
+                        failure:
+                            `${process.env.FRONTEND_URL}/failure`,
 
-                notification_url: process.env.NOTIFICATION_URL,
+                        pending:
+                            `${process.env.FRONTEND_URL}/pending`
+                    },
 
-                auto_return: 'approved'
-            }
-        });
+                    notification_url:
+                        process.env.NOTIFICATION_URL,
+
+                    auto_return: 'approved'
+                }
+            });
 
         console.log(
             'Preferencia creada:',
             preferencia.id
         );
 
-        orden.id_preferencia = preferencia.id;
+        orden.id_preferencia =
+            preferencia.id;
 
-        await orden.save();
+        await orden.save({ session });
+
+        await session.commitTransaction();
 
         return res.status(200).json({
             id: preferencia.id
@@ -200,33 +248,7 @@ exports.crearPreferencia = async (req, res) => {
 
     } catch (error) {
 
-        // rollback del stock reservado
-        for (const reserva of reservasRealizadas) {
-
-            await Producto.findOneAndUpdate(
-                {
-                    _id: reserva.productoId,
-                    'talles.talle': reserva.talle
-                },
-                {
-                    $inc: {
-                        'talles.$.stock': reserva.cantidad
-                    }
-                }
-            );
-        }
-
-        if (reservaCreada) {
-            await ReservaStock.findByIdAndDelete(
-                reservaCreada._id
-            );
-        }
-
-        if (orden?._id) {
-            await Orden.findByIdAndDelete(
-                orden._id
-            );
-        }
+        await session.abortTransaction();
 
         console.error(
             'Error al crear preferencia:',
@@ -236,20 +258,39 @@ exports.crearPreferencia = async (req, res) => {
         return res.status(500).json({
             error: 'Error al procesar el pago'
         });
+
+    } finally {
+
+        session.endSession();
     }
 };
 
+// WEBHOOK
+exports.procesarWebhook = async (
+    req,
+    res
+) => {
 
+    const session =
+        await mongoose.startSession();
 
-//Webhook
-exports.procesarWebhook = async (req, res) => {
     try {
 
-        const tipo = req.body?.type;
-        const idPago = req.body?.data?.id;
+        session.startTransaction();
 
-        // Ignorar eventos que no sean pagos
-        if (tipo !== 'payment' || !idPago) {
+        const tipo = req.body?.type;
+
+        const idPago =
+            req.body?.data?.id;
+
+        // Ignorar eventos no payment
+        if (
+            tipo !== 'payment' ||
+            !idPago
+        ) {
+
+            await session.abortTransaction();
+
             return res.sendStatus(200);
         }
 
@@ -258,68 +299,143 @@ exports.procesarWebhook = async (req, res) => {
         });
 
         if (!pago) {
-            console.warn(`Pago ${idPago} no encontrado`);
-            return res.sendStatus(200);
-        }
 
-        const externalReference = pago.external_reference;
-
-        if (!externalReference) {
             console.warn(
-                `Pago ${idPago} recibido sin external_reference`
+                `Pago ${idPago} no encontrado`
             );
 
+            await session.abortTransaction();
+
             return res.sendStatus(200);
         }
 
-        const orden = await Orden.findById(externalReference);
+        const externalReference =
+            pago.external_reference;
+
+        if (!externalReference) {
+
+            console.warn(
+                `Pago ${idPago} sin external_reference`
+            );
+
+            await session.abortTransaction();
+
+            return res.sendStatus(200);
+        }
+
+        const orden =
+            await Orden.findById(
+                externalReference
+            ).session(session);
 
         if (!orden) {
+
             console.warn(
                 `Orden ${externalReference} no encontrada`
             );
 
+            await session.abortTransaction();
+
             return res.sendStatus(200);
         }
 
-        // Idempotencia:
-        // Mercado Pago puede reenviar el webhook varias veces.
-        if (orden.estado_pago === 'approved') {
+        // Idempotencia
+        if (
+            orden.estado_pago ===
+            'approved'
+        ) {
+
+            await session.abortTransaction();
+
             return res.sendStatus(200);
         }
 
         orden.id_pago = pago.id;
         orden.estado_pago = pago.status;
-        orden.detalle_estado = pago.status_detail;
-        orden.fecha_aprobado = pago.date_approved;
+        orden.detalle_estado =
+            pago.status_detail;
 
-        await orden.save();
+        orden.fecha_aprobado =
+            pago.date_approved;
 
-        // Sólo ejecutar lógica final cuando el pago fue aprobado
+        await orden.save({ session });
+
+        // Si no está aprobado
         if (pago.status !== 'approved') {
+
+            await session.commitTransaction();
+
             return res.sendStatus(200);
         }
 
-        // Marcar reserva como consumida
+        // Marcar reserva consumida
         if (orden.idReserva) {
 
             await ReservaStock.findByIdAndUpdate(
                 orden.idReserva,
                 {
                     estado: 'consumida'
-                }
+                },
+                { session }
             );
         }
 
-        // Vaciar carrito del usuario
+        // Crear movimientos inventario
+        for (const item of orden.productos) {
+
+            await MovimientoInventario.create(
+                [{
+                    tipo: 'venta_online',
+
+                    producto:
+                        item.producto,
+
+                    nombreProducto:
+                        item.titulo,
+
+                    detalles: [
+                        {
+                            talle: item.talle,
+
+                            cantidad:
+                                -item.cantidad
+                        }
+                    ],
+
+                    referenciaId:
+                        orden._id,
+
+                    modeloReferencia:
+                        'Orden',
+
+                    observaciones:
+                        'Venta online MercadoPago',
+
+                    creadoPor: null
+                }],
+                { session }
+            );
+        }
+
+        // Vaciar carrito
         await Carrito.findOneAndUpdate(
-            { usuario: orden.usuario },
-            { productos: [] }
+            {
+                usuario:
+                    orden.usuario
+            },
+            {
+                productos: []
+            },
+            { session }
         );
+
+        await session.commitTransaction();
 
         return res.sendStatus(200);
 
     } catch (error) {
+
+        await session.abortTransaction();
 
         console.error(
             'Error procesando webhook Mercado Pago:',
@@ -327,5 +443,9 @@ exports.procesarWebhook = async (req, res) => {
         );
 
         return res.sendStatus(500);
+
+    } finally {
+
+        session.endSession();
     }
 };

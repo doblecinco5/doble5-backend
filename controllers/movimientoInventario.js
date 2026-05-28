@@ -1,4 +1,5 @@
 const mongoose = require('mongoose');
+const { request, response } = require('express');
 const Producto = require('../models/producto');
 const MovimientoInventario = require('../models/movimientoInventario');
 
@@ -132,6 +133,156 @@ const crearAjusteInventario = async (
     }
 };
 
+const obtenerMovimientosInventario = async (
+    req = request,
+    res = response
+) => {
+
+    try {
+
+        const {
+            limite = 10,
+            desde = 0,
+            tipo,
+            query = '',
+            fechaDesde,
+            fechaHasta
+        } = req.query;
+
+        const filtros = {};
+
+        // Filtro por tipo
+        if (tipo) {
+            filtros.tipo = tipo;
+        }
+
+        // Buscar por nombre producto
+        if (query) {
+
+            filtros.nombreProducto = {
+                $regex: query,
+                $options: 'i'
+            };
+        }
+
+        // Filtro fechas
+        if (fechaDesde || fechaHasta) {
+
+            filtros.createdAt = {};
+
+            if (fechaDesde) {
+
+                filtros.createdAt.$gte =
+                    new Date(fechaDesde);
+            }
+
+            if (fechaHasta) {
+
+                const fechaFinal =
+                    new Date(fechaHasta);
+
+                fechaFinal.setHours(
+                    23,
+                    59,
+                    59,
+                    999
+                );
+
+                filtros.createdAt.$lte =
+                    fechaFinal;
+            }
+        }
+
+        const [total, movimientos] =
+            await Promise.all([
+
+                MovimientoInventario.countDocuments(
+                    filtros
+                ),
+
+                MovimientoInventario
+                    .find(filtros)
+
+                    .populate(
+                        'producto',
+                        'nombre categoria precio imagenes talles'
+                    )
+
+                    .populate(
+                        'creadoPor',
+                        'nombre correo'
+                    )
+
+                    .sort({
+                        createdAt: -1
+                    })
+
+                    .skip(Number(desde))
+
+                    .limit(Number(limite))
+            ]);
+
+        return res.json({
+            total,
+            movimientos
+        });
+
+    } catch (error) {
+
+        console.error(error);
+
+        return res.status(500).json({
+            msg: 'Error al obtener movimientos'
+        });
+    }
+};
+
+const obtenerMovimientoInventario = async (
+    req = request,
+    res = response
+) => {
+
+    try {
+
+        const { id } = req.params;
+
+        const movimiento =
+            await MovimientoInventario
+                .findById(id)
+
+                .populate(
+                    'producto',
+                    'nombre categoria precio imagenes talles'
+                )
+
+                .populate(
+                    'creadoPor',
+                    'nombre correo'
+                );
+
+        if (!movimiento) {
+
+            return res.status(404).json({
+                msg: 'Movimiento no encontrado'
+            });
+        }
+
+        return res.json({
+            movimiento
+        });
+
+    } catch (error) {
+
+        console.error(error);
+
+        return res.status(500).json({
+            msg: 'Error al obtener movimiento'
+        });
+    }
+};
+
 module.exports = {
-    crearAjusteInventario
+    crearAjusteInventario,
+    obtenerMovimientosInventario,
+    obtenerMovimientoInventario
 };

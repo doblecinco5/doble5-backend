@@ -1,4 +1,5 @@
 const mongoose = require('mongoose');
+const { request, response } = require('express');
 const Producto = require('../models/producto');
 const Ingreso = require('../models/ingreso');
 const MovimientoInventario = require('../models/movimientoInventario');
@@ -195,6 +196,124 @@ const crearIngreso = async (req, res) => {
     }
 };
 
+const obtenerIngresos = async (req = request, res = response) => {
+
+    try {
+
+        const {
+            limite = 10,
+            desde = 0,
+            proveedor = '',
+            query = '',
+            fechaDesde,
+            fechaHasta
+        } = req.query;
+
+        const filtros = {};
+
+        // Buscar por proveedor
+        if (proveedor) {
+            filtros.proveedor = new RegExp(
+                proveedor,
+                'i'
+            );
+        }
+
+        // Buscar por nombre producto
+        if (query) {
+            filtros['productos.nombreProducto'] =
+                new RegExp(query, 'i');
+        }
+
+        // Filtro fechas
+        if (fechaDesde || fechaHasta) {
+
+            filtros.createdAt = {};
+
+            if (fechaDesde) {
+                filtros.createdAt.$gte =
+                    new Date(fechaDesde);
+            }
+
+            if (fechaHasta) {
+                filtros.createdAt.$lte =
+                    new Date(fechaHasta);
+            }
+        }
+
+        const [total, ingresos] =
+            await Promise.all([
+
+                Ingreso.countDocuments(filtros),
+
+                Ingreso.find(filtros)
+                    .sort({ createdAt: -1 })
+                    .skip(Number(desde))
+                    .limit(Number(limite))
+                    .populate(
+                        'creadoPor',
+                        'nombre correo'
+                    )
+                    .populate(
+                        'productos.producto',
+                        'nombre categoria precio imagenes'
+                    )
+            ]);
+
+        return res.json({
+            total,
+            ingresos
+        });
+
+    } catch (error) {
+
+        console.error(error);
+
+        return res.status(500).json({
+            msg: 'Error al obtener ingresos'
+        });
+    }
+};
+
+const obtenerIngreso = async (req, res) => {
+
+    try {
+
+        const { id } = req.params;
+
+        const ingreso = await Ingreso.findById(id)
+            .populate(
+                'creadoPor',
+                'nombre correo'
+            )
+            .populate(
+                'productos.producto',
+                'nombre categoria precio'
+            );
+
+        if (!ingreso) {
+
+            return res.status(404).json({
+                msg: 'Ingreso no encontrado'
+            });
+        }
+
+        return res.json({
+            ingreso
+        });
+
+    } catch (error) {
+
+        console.error(error);
+
+        return res.status(500).json({
+            msg: 'Error al obtener ingreso'
+        });
+    }
+};
+
 module.exports = {
-    crearIngreso
+    crearIngreso,
+    obtenerIngresos,
+    obtenerIngreso,
 };

@@ -22,7 +22,8 @@ const MovimientoInventarioSchema = new Schema({
             'ingreso',
             'venta_online',
             'venta_presencial',
-            'ajuste'
+            'ajuste',
+            'creacion'
         ],
         required: true
     },

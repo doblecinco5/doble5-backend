@@ -1,6 +1,7 @@
 const { request, response } = require('express');
 const Producto = require('../models/producto');
-
+const mongoose = require('mongoose')
+const MovimientoInventario = require('../models/movimientoInventario');
 // Marcar o desmarcar un producto como destacado
 const marcarProductoDestacado = async (req, res) => {
     const { id } = req.params;

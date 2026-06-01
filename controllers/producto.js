@@ -1,6 +1,7 @@
 const { request, response } = require('express');
 const Producto = require('../models/producto');
-
+const mongoose = require('mongoose')
+const MovimientoInventario = require('../models/movimientoInventario');
 // Marcar o desmarcar un producto como destacado
 const marcarProductoDestacado = async (req, res) => {
     const { id } = req.params;
@@ -36,45 +37,127 @@ const obtenerProductosDestacados = async (req, res) => {
 
 // Crear un nuevo producto
 const productoPOST = async (req = request, res = response) => {
-    const { nombre, descripcion, categoria, precio, imagenes, talles } = req.body;
 
-    if (!Array.isArray(talles) || !talles.every(t => t.talle && typeof t.stock === 'number')) {
-        return res.status(400).json({ msg: 'Los talles deben tener estructura { talle, stock }' });
-    }
+    const session = await mongoose.startSession();
 
     try {
-        const productoExistente = await Producto.findOne({ nombre: nombre });
+
+        session.startTransaction();
+
+        const {
+            nombre,
+            descripcion,
+            categoria,
+            precio,
+            imagenes,
+            talles
+        } = req.body;
+
+        if (
+            !Array.isArray(talles) ||
+            !talles.every(
+                t =>
+                    t.talle &&
+                    typeof t.stock === 'number'
+            )
+        ) {
+
+            await session.abortTransaction();
+
+            return res.status(400).json({
+                msg: 'Los talles deben tener estructura { talle, stock }'
+            });
+        }
+
+        const productoExistente =
+            await Producto.findOne({
+                nombre
+            }).session(session);
+
         if (productoExistente) {
+
+            await session.abortTransaction();
+
             return res.status(400).json({
                 msg: `El producto ${nombre} ya existe.`
             });
         }
 
-        const tallesNormalizados = talles.map(t => ({
-            talle: t.talle.toUpperCase(),
-            stock: t.stock
-        }));
+        const tallesNormalizados =
+            talles.map(t => ({
+                talle: t.talle.toUpperCase(),
+                stock: t.stock
+            }));
 
-        const producto = new Producto({
-            nombre: nombre,
-            descripcion,
-            categoria: categoria,
-            precio,
-            imagenes,
-            talles: tallesNormalizados
-        });
+        const productosCreados =
+            await Producto.create(
+                [{
+                    nombre,
+                    descripcion,
+                    categoria,
+                    precio,
+                    imagenes,
+                    talles: tallesNormalizados
+                }],
+                { session }
+            );
 
-        await producto.save();
+        const producto = productosCreados[0];
 
-        res.status(201).json({
+        // Crear movimiento inventario
+        await MovimientoInventario.create(
+            [{
+                tipo: 'creacion',
+
+                producto: producto._id,
+
+                nombreProducto: producto.nombre,
+
+                detalles: tallesNormalizados.map(
+                    item => ({
+                        talle: item.talle,
+                        cantidad: item.stock
+                    })
+                ),
+
+                referenciaId: producto._id,
+
+                modeloReferencia: 'Producto',
+
+                observaciones: 'Creación manual de producto',
+
+                creadoPor: req.usuario._id
+            }],
+            { session }
+        );
+
+        await session.commitTransaction();
+
+        return res.status(201).json({
             msg: 'Producto creado correctamente',
             producto
         });
+
     } catch (error) {
-        console.error('Error al crear producto:', error);
-        res.status(500).json({ msg: 'Error al crear el producto' });
+
+        await session.abortTransaction();
+
+        console.error(
+            'Error al crear producto:',
+            error
+        );
+
+        return res.status(500).json({
+            msg: 'Error al crear el producto'
+        });
+
+    } finally {
+
+        session.endSession();
     }
 };
+
+
 
 // Obtener productos con búsqueda opcional y paginación
 const productosGET = async (req = request, res = response) => {
@@ -159,7 +242,6 @@ const productoGET = async (req = request, res = response) => {
 };
 
 // Actualizar un producto
-// Actualizar un producto
 const productoPUT = async (req = request, res = response) => {
     const { id } = req.params;
     const { ...data } = req.body;
@@ -178,9 +260,70 @@ const productoPUT = async (req = request, res = response) => {
     }
 
     try {
-        const productoActualizado = await Producto.findByIdAndUpdate(id, data, { new: true });
+        const productoOriginal = await Producto.findById(id);
+
+        if (!productoOriginal) {
+            return res.status(404).json({
+                msg: 'Producto no encontrado'
+            });
+        }
+
+        const productoActualizado =
+            await Producto.findByIdAndUpdate(
+                id,
+                data,
+                { new: true }
+            );
         if (!productoActualizado) {
             return res.status(404).json({ msg: 'Producto no encontrado' });
+        }
+
+        if (data.talles) {
+
+            const detalles =
+                data.talles.map(talleNuevo => {
+
+                    const talleViejo =
+                        productoOriginal.talles.find(
+                            t =>
+                                t.talle ===
+                                talleNuevo.talle
+                        );
+
+                    const stockAnterior =
+                        talleViejo?.stock || 0;
+
+                    return {
+                        talle: talleNuevo.talle,
+                        cantidad:
+                            talleNuevo.stock -
+                            stockAnterior
+                    };
+                });
+
+            await MovimientoInventario.create({
+                tipo: 'ajuste',
+
+                producto:
+                    productoActualizado._id,
+
+                nombreProducto:
+                    productoActualizado.nombre,
+
+                detalles,
+
+                referenciaId:
+                    productoActualizado._id,
+
+                modeloReferencia:
+                    'Producto',
+
+                observaciones:
+                    'Ajuste manual desde edición de producto',
+
+                creadoPor:
+                    req.usuario._id
+            });
         }
 
         res.json({
@@ -214,6 +357,54 @@ const productoDELETE = async (req = request, res = response) => {
     }
 };
 
+const buscarProductosPorNombre = async (req, res) => {
+
+    try {
+
+        const { query = '' } = req.query;
+
+        if (query.trim().length < 2) {
+
+            return res.json({
+                productos: []
+            });
+        }
+
+        const regex = new RegExp(
+            query.trim(),
+            'i'
+        );
+
+        const productos = await Producto.find({
+            activo: true,
+            nombre: regex
+        })
+            .select('_id nombre categoria')
+            .sort({ nombre: 1 })
+            .limit(10);
+
+        return res.json({
+            productos,
+            existeExacto: productos.some(
+                p =>
+                    p.nombre.toLowerCase() ===
+                    query.trim().toLowerCase()
+            )
+        });
+
+    } catch (error) {
+
+        console.error(
+            'Error al buscar productos:',
+            error
+        );
+
+        return res.status(500).json({
+            msg: 'Error al buscar productos'
+        });
+    }
+};
+
 module.exports = {
     marcarProductoDestacado,
     obtenerProductosDestacados,
@@ -221,5 +412,6 @@ module.exports = {
     productosGET,
     productoGET,
     productoPUT,
-    productoDELETE
+    productoDELETE,
+    buscarProductosPorNombre
 };

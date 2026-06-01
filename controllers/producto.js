@@ -242,7 +242,6 @@ const productoGET = async (req = request, res = response) => {
 };
 
 // Actualizar un producto
-// Actualizar un producto
 const productoPUT = async (req = request, res = response) => {
     const { id } = req.params;
     const { ...data } = req.body;
@@ -261,9 +260,70 @@ const productoPUT = async (req = request, res = response) => {
     }
 
     try {
-        const productoActualizado = await Producto.findByIdAndUpdate(id, data, { new: true });
+        const productoOriginal = await Producto.findById(id);
+
+        if (!productoOriginal) {
+            return res.status(404).json({
+                msg: 'Producto no encontrado'
+            });
+        }
+
+        const productoActualizado =
+            await Producto.findByIdAndUpdate(
+                id,
+                data,
+                { new: true }
+            );
         if (!productoActualizado) {
             return res.status(404).json({ msg: 'Producto no encontrado' });
+        }
+
+        if (data.talles) {
+
+            const detalles =
+                data.talles.map(talleNuevo => {
+
+                    const talleViejo =
+                        productoOriginal.talles.find(
+                            t =>
+                                t.talle ===
+                                talleNuevo.talle
+                        );
+
+                    const stockAnterior =
+                        talleViejo?.stock || 0;
+
+                    return {
+                        talle: talleNuevo.talle,
+                        cantidad:
+                            talleNuevo.stock -
+                            stockAnterior
+                    };
+                });
+
+            await MovimientoInventario.create({
+                tipo: 'ajuste',
+
+                producto:
+                    productoActualizado._id,
+
+                nombreProducto:
+                    productoActualizado.nombre,
+
+                detalles,
+
+                referenciaId:
+                    productoActualizado._id,
+
+                modeloReferencia:
+                    'Producto',
+
+                observaciones:
+                    'Ajuste manual desde edición de producto',
+
+                creadoPor:
+                    req.usuario._id
+            });
         }
 
         res.json({
@@ -297,6 +357,54 @@ const productoDELETE = async (req = request, res = response) => {
     }
 };
 
+const buscarProductosPorNombre = async (req, res) => {
+
+    try {
+
+        const { query = '' } = req.query;
+
+        if (query.trim().length < 2) {
+
+            return res.json({
+                productos: []
+            });
+        }
+
+        const regex = new RegExp(
+            query.trim(),
+            'i'
+        );
+
+        const productos = await Producto.find({
+            activo: true,
+            nombre: regex
+        })
+            .select('_id nombre categoria')
+            .sort({ nombre: 1 })
+            .limit(10);
+
+        return res.json({
+            productos,
+            existeExacto: productos.some(
+                p =>
+                    p.nombre.toLowerCase() ===
+                    query.trim().toLowerCase()
+            )
+        });
+
+    } catch (error) {
+
+        console.error(
+            'Error al buscar productos:',
+            error
+        );
+
+        return res.status(500).json({
+            msg: 'Error al buscar productos'
+        });
+    }
+};
+
 module.exports = {
     marcarProductoDestacado,
     obtenerProductosDestacados,
@@ -304,5 +412,6 @@ module.exports = {
     productosGET,
     productoGET,
     productoPUT,
-    productoDELETE
+    productoDELETE,
+    buscarProductosPorNombre
 };

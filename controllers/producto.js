@@ -379,7 +379,9 @@ const buscarProductosPorNombre = async (req, res) => {
             activo: true,
             nombre: regex
         })
-            .select('_id nombre categoria')
+            .select(
+                '_id nombre categoria precio talles'
+            )
             .sort({ nombre: 1 })
             .limit(10);
 

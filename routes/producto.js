@@ -25,8 +25,8 @@ router.get('/destacados', obtenerProductosDestacados);
 
 router.get(
     '/buscar',
-    validarJWT,
-    esAdminRol,
+    [validarJWT,
+    esAdminRol],
     buscarProductosPorNombre
 );
 
